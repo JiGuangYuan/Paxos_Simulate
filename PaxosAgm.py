@@ -1,5 +1,5 @@
 # -*- coding=utf-8 -*-
-'''
+"""
 
 该demo程序主要用来模拟分布式计算中的paxos算法
 系统分为三个部分：
@@ -64,7 +64,7 @@ proposer3的决议[第一块数据由C进行更新]被否决，停止提议，�
 proposer1的决议[第一块数据由B进行更新]被否决，停止提议，退出
 proposer4的本轮决议[第一块数据由C进行更新]投票结束，同意:0拒绝：0选择:20
 ############# proposer4的决议[第一块数据由C进行更新]被同意，完成决议过程 #############   #决议被通过，模拟完成，每次被通过的议案内容不一样
-'''
+"""
 
 import random
 import threading
@@ -95,9 +95,8 @@ def printStr(string):
 #
 ###############################################
 class Leader(threading.Thread):
-
-    def __init__(self, t_name,# 发起者名称
-                 queue_to_leader,# 接收请求的队列
+    def __init__(self, t_name,  # 发起者名称
+                 queue_to_leader,  # 接收请求的队列
                  queue_to_proposers,  # 和proposer通讯的消息队列
                  acceptor_num  # 表决者数量，用来生成表决者编号
                  ):
@@ -118,11 +117,11 @@ class Leader(threading.Thread):
         self.value_num = 100
 
     def run(self):
-        while(True):
+        while (True):
             # 接收请求，分配议案
             var = self.queue_recv.get()
             # 请求数据
-            if(var["type"] == "request"):
+            if var["type"] == "request":
                 # 接收到数据"
                 # 随机分配半数以上的acceptors
                 acceptors = random.sample(self.acceptor_list, len(self.acceptor_list) + 1 / 2)
@@ -135,12 +134,12 @@ class Leader(threading.Thread):
                 self.value_index += 1
 
             # 更新接收者列表
-            if(var["type"] == "renew"):
+            if var["type"] == "renew":
                 var_list = var["list"]
                 for i in var["failure"]:
                     var_list.remove(i)
                     tmp = random.sample(self.acceptor_list, 1)
-                    while (tmp[0] in var["failure"]):
+                    while tmp[0] in var["failure"]:
                         tmp = random.sample(self.acceptor_list, 1)
                     var_list.append(tmp[0])
                 rsp = {
@@ -157,7 +156,6 @@ class Leader(threading.Thread):
 #
 ###############################################
 class Proposer(threading.Thread):
-
     def __init__(self, t_name,  # 发起者名称
                  q_to_leader,  # 和leader通信的队列
                  queue_from_acceptor,  # 和acceptor通讯的消息队列
@@ -185,7 +183,7 @@ class Proposer(threading.Thread):
         }
         self.queue_recv.put(start_sig)
         # 循环接收消息
-        while (True):
+        while True:
             try:
                 var = self.queue_recv.get(True, 1)
                 # 接收到消息，准备处理
@@ -193,24 +191,25 @@ class Proposer(threading.Thread):
 
             except Empty:
                 # 没有接受到消息
-                if(self.start_propose == True and time.time() - self.time_start > 5):
+                if self.start_propose == True and time.time() - self.time_start > 5:
                     printStr(self.name + "的本轮决议" + self.value + "投票结束，同意:" +
                              str(self.accept) + "拒绝：" + str(self.reject) + "选择:" + str(self.chosen))
                     self.start_propose = False
-                    if(self.reject > 0):
+                    if self.reject > 0:
                         printStr(self.name + "的决议" +
                                  self.value + "被否决，停止提议，退出")
-                    if(self.chosen == len(self.acceptors)):
+                    if self.chosen == len(self.acceptors):
                         printStr("############# " + self.name + "的决议" +
                                  self.value + "被同意，完成决议过程 #############")
                     if (self.accept > 0 or
-                        (self.chosen < len(self.acceptors) and self.chosen > 0 and self.reject == 0) or
+                            (len(self.acceptors) > self.chosen > 0 and self.reject == 0) or
                             (self.accept == 0 and self.chosen == 0 and self.reject == 0)):
                         self.reject = 0
                         self.chosen = 0
                         self.accept = 0
                         self.sendPropose()
                 continue
+
     ###############################################
     #
     # 从leader那里获取数据
@@ -238,18 +237,18 @@ class Proposer(threading.Thread):
     ###############################################
     def processMsg(self, var):
         # 如果是启动命令，启动程序
-        if(var["type"] == "start"):
+        if var["type"] == "start":
             self.sendPropose()
         # 如果是acceptor过来的报文，解析报文
-        if(var["type"] == "accpting"):
+        if var["type"] == "accpting":
             # 超时丢弃
-            if(time.time() - self.time_start > 5):
+            if time.time() - self.time_start > 5:
                 printStr("无效报文，丢弃...")
                 self.fail_list.append(var["accpetor"])
             else:
-                if(var["result"] == "reject"):
+                if var["result"] == "reject":
                     self.reject += 1
-                if(var["result"] == "accept"):
+                if var["result"] == "accept":
                     self.accept += 1
                     # 修改决议为acceptor建议的决议
                     self.value = var["value"]
@@ -260,7 +259,7 @@ class Proposer(threading.Thread):
                         "proposer": self.num
                     }
 
-                if(var["result"] == "chosen"):
+                if var["result"] == "chosen":
                     self.chosen += 1
 
     ###############################################
@@ -275,7 +274,7 @@ class Proposer(threading.Thread):
         printStr(self.name + "发出了一个决议，内容为:" + str(self.value))
         for acceptor in self.acceptors:
             # 生成决议，有5%概率发送失败
-            if(random.randrange(100) < 98):
+            if (random.randrange(100) < 98):
                 self.myvar = {
                     "type": "proposing",
                     "Vnum": self.s_num,
@@ -283,7 +282,7 @@ class Proposer(threading.Thread):
                     "proposer": self.num,
                     "time": self.time_start
                 }
-                #printStr(self.name + " >>>>>" +str(var))
+                # printStr(self.name + " >>>>>" +str(var))
                 self.queue_send_list[acceptor].put(self.myvar)
             else:
                 printStr(self.name + " >>>>> 发送决议失败")
@@ -299,7 +298,6 @@ class Proposer(threading.Thread):
 ###############################################
 
 class Acceptor(threading.Thread):
-
     def __init__(self, t_name, queue_from_proposer, queue_to_proposers, m_num):
         threading.Thread.__init__(self, name=t_name)
         self.queue_recv = queue_from_proposer
@@ -308,15 +306,15 @@ class Acceptor(threading.Thread):
         self.values = {
             "last": 0,  # 最后一次表决的议案编号
             "value": "",  # 最后一次表决的议案的内容
-                     "max": 0}  # 承诺的最低表决议案编号
+            "max": 0}  # 承诺的最低表决议案编号
 
     def run(self):
-        while(True):
+        while (True):
             try:
                 var = self.queue_recv.get(False, 1)
                 vars = self.processPropose(var)
                 # 有2%的概率发送失败
-                if(random.randrange(100) < 98):
+                if (random.randrange(100) < 98):
                     self.queue_to_proposers[var["proposer"]].put(vars)
                 else:
                     printStr(self.name + " >>>>> 发送审批失败")
@@ -331,7 +329,7 @@ class Acceptor(threading.Thread):
     def processPropose(self, value):
         res = {}
         # 如果从来没接收过议案，跟新自身议案
-        if(0 == self.values["max"] and 0 == self.values["last"]):
+        if 0 == self.values["max"] and 0 == self.values["last"]:
             self.values["max"] = value["Vnum"]
             self.values["last"] = value["Vnum"]
             self.values["value"] = value["Value"]
@@ -344,7 +342,7 @@ class Acceptor(threading.Thread):
                 "time": value["time"]}
         else:
             # 如果收到的议案大于承诺最低表决的议案，同意并告知之前表决结果
-            if(self.values["max"] < value["Vnum"]):
+            if self.values["max"] < value["Vnum"]:
                 self.values["max"] = value["Vnum"]
                 res = {
                     "type": "accpting",
@@ -355,7 +353,7 @@ class Acceptor(threading.Thread):
                     "time": value["time"]}
             else:
                 # 如果收到的议案等于承诺最低表决的议案，完全同意议案，表决结束
-                if(self.values["max"] == value["Vnum"]):
+                if self.values["max"] == value["Vnum"]:
 
                     self.values["last"] = value["Vnum"]
                     self.values["value"] = value["Value"]
