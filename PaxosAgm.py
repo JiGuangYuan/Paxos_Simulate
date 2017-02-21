@@ -75,26 +75,26 @@ from queue import Empty
 # 线程锁
 mutex = threading.Lock()
 
+'''
+打印信息的函数
+避免多线程打印打乱的情况
+'''
 
-###############################################
-#
-# 辅助函数
-# 打印信息的辅助函数，避免多线程打印打乱的情况
-#
-###############################################
+
 def printStr(string):
     mutex.acquire()
     print(string)
     mutex.release()
 
 
-###############################################
-#
-# paxos 决议管理者
-# 负责所有的决议管理和编号分发
-#
-###############################################
+'''
+Paxos 决议管理者
+负责所有的决议管理和编号分发
+'''
+
+
 class Leader(threading.Thread):
+    # 发起者初始化
     def __init__(self, t_name,  # 发起者名称
                  queue_to_leader,  # 接收请求的队列
                  queue_to_proposers,  # 和proposer通讯的消息队列
@@ -117,7 +117,7 @@ class Leader(threading.Thread):
         self.value_num = 100
 
     def run(self):
-        while (True):
+        while True:
             # 接收请求，分配议案
             var = self.queue_recv.get()
             # 请求数据
@@ -149,12 +149,12 @@ class Leader(threading.Thread):
             self.queue_send_list[var["ID"]].put(rsp)
 
 
-###############################################
-#
-# paxos 决议发起者
-# 议案的提出者，负责提出议案并等待各个接收者的表决
-#
-###############################################
+'''
+paxos 决议发起者
+议案的提出者，负责提出议案并等待各个接收者的表决
+'''
+
+
 class Proposer(threading.Thread):
     def __init__(self, t_name,  # 发起者名称
                  q_to_leader,  # 和leader通信的队列
@@ -210,11 +210,9 @@ class Proposer(threading.Thread):
                         self.sendPropose()
                 continue
 
-    ###############################################
-    #
-    # 从leader那里获取数据
-    #
-    ###############################################
+    '''
+    从leader那里获取数据
+    '''
 
     def getValueFromLeader(self):
 
@@ -230,11 +228,10 @@ class Proposer(threading.Thread):
         self.value = info["value"]
         self.acceptors = info["acceptors"]
 
-    ###############################################
-    #
-    # 处理报文
-    #
-    ###############################################
+    '''
+    处理报文
+    '''
+
     def processMsg(self, var):
         # 如果是启动命令，启动程序
         if var["type"] == "start":
@@ -262,11 +259,10 @@ class Proposer(threading.Thread):
                 if var["result"] == "chosen":
                     self.chosen += 1
 
-    ###############################################
-    #
-    # 发送议案给表决者
-    #
-    ###############################################
+    '''
+    发送议案给表决者
+    '''
+
     def sendPropose(self):
         self.time_start = time.time()
         self.start_propose = True
@@ -290,12 +286,11 @@ class Proposer(threading.Thread):
             time.sleep(1 / random.randrange(1, 10))
 
 
-###############################################
-#
-# paxos 决议表决者acceptor
-# 负责接收proposer的决议并进行表决
-#
-###############################################
+'''
+paxos 决议表决者acceptor
+负责接收proposer的决议并进行表决
+'''
+
 
 class Acceptor(threading.Thread):
     def __init__(self, t_name, queue_from_proposer, queue_to_proposers, m_num):
@@ -321,11 +316,10 @@ class Acceptor(threading.Thread):
             except Empty:
                 continue
 
-    ###############################################
-    #
-    # 处理议案提出者提出的决议
-    #
-    ###############################################
+    '''
+    处理议案提出者提出的决议
+    '''
+
     def processPropose(self, value):
         res = {}
         # 如果从来没接收过议案，跟新自身议案
