@@ -22,14 +22,18 @@ import time
 from multiprocessing import Queue
 from queue import Empty
 
-# 线程锁
 mutex = threading.Lock()
+
 # 超时丢弃时间
 OVER_TIME = 5
 # 网络丢包率
 PACKET_LOSS = 20
 # 网络发送时延
 SEND_DELAY = 0
+# proposers的数量
+proposers_num = 3
+# acceptors的数量
+acceptors_num = 5
 
 
 def print_str(string):
@@ -148,7 +152,7 @@ class Proposer(threading.Thread):
         # 循环接收从acceptor过来的消息
         while True:
             try:
-                # 阻塞调用最多1秒
+                # 阻塞调用,至多阻塞1秒
                 var = self.queue_recv.get(True, 1)
                 # 接收到消息，准备处理
                 self.process_msg(var)
@@ -182,7 +186,7 @@ class Proposer(threading.Thread):
             "type": "request",
             "ID": self.num
         }
-        print_str("从Leader处获取数据...")
+        print_str(self.name + "从Leader处获取数据...")
         self.queue_to_leader.put(req)
         info = self.queue_recv.get()
         # 从Leader处获取的议案数据
@@ -339,20 +343,18 @@ class Acceptor(threading.Thread):
 
 
 if __name__ == '__main__':
-    acceptors_num = 5  # acceptors的数量
-    proposers_num = 3  # proposers的数量
-    q_to_acceptors = []  # acceptor通讯的消息队列
     q_to_proposers = []  # proposer通讯的消息队列
+    q_to_acceptors = []  # acceptor通讯的消息队列
 
     q_leader_to_proposers = []
     q_to_leader = Queue()  # 接收请求的队列
 
-    for i in range(0, acceptors_num):
-        q_to_acceptors.append(Queue())
-
     for i in range(0, proposers_num):
         q_to_proposers.append(Queue())
         q_leader_to_proposers.append(Queue())
+
+    for i in range(0, acceptors_num):
+        q_to_acceptors.append(Queue())
 
     ld = Leader("Leader", q_to_leader, q_to_proposers, acceptors_num)
     ld.setDaemon(True)
