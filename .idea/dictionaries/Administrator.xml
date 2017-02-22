@@ -2,6 +2,7 @@
   <dictionary name="Administrator">
     <words>
       <w>paxos</w>
+      <w>recv</w>
     </words>
   </dictionary>
 </component>
