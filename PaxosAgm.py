@@ -1,18 +1,12 @@
 # -*- coding=utf-8 -*-
 """
 
-该demo程序主要用来模拟分布式计算中的paxos算法
-系统分为三个部分：
-Leader：负责所有议案和议案编号的分发，这是一个辅助线程
-Proposer：议案的提出者，负责提出议案并等待各个接收者的表决
+该demo程序主要用来模拟分布式计算中Paxos算法的应用
+系统分为四个部分：
+Leader：议案的提出者，负责提出议案并等待各个Leaner表决
+Proposer：竞争Leader，向acceptor发出选票
 Acceptor: 议案的表决者，负责接收议案并进行表决
-
-
-
-该程序只是一个demo模拟，没有任何实际用途，主要用来理解paxos协议
-
-注意：由于都是最后一个启动的Proposer线程拿到最大编号，所以最后都是最后一个线程的议案通过，但是这并不影响paxos协议，因为每次通过的议案虽然
-编号是一样的，但是议案的内容每次都是不一样的
+learner: 议案的学习者，负责执行leader提出的议案
 
 """
 
@@ -34,6 +28,8 @@ SEND_DELAY = 0
 proposers_num = 3
 # acceptors的数量
 acceptors_num = 5
+# learners的数量
+learners_num = 5
 
 
 def print_str(string):
@@ -69,12 +65,14 @@ class Leader(threading.Thread):
         self.acceptor_list = list(range(0, acceptor_num))
         self.value_index = 0
         # 议案内容
-        self.values = ["[第一块数据由A进行更新]",
-                       "[第一块数据由B进行更新]",
-                       "[第一块数据由C进行更新]",
-                       "[第一块数据由D进行更新]",
-                       "[第一块数据由E进行更新]",
-                       "[第一块数据由F进行更新]"]
+        self.values = ["[议案：A]",
+                       "[议案：B]",
+                       "[议案：C]",
+                       "[议案：D]",
+                       "[议案：E]",
+                       "[议案：F]",
+                       "[议案：G]",
+                       "[议案：H]"]
         # 议案编号
         self.value_num = 100
 
@@ -88,13 +86,13 @@ class Leader(threading.Thread):
                 # 接收到数据"
                 # 随机分配半数以上的acceptors
                 acceptors_random = random.sample(self.acceptor_list, len(self.acceptor_list))
+                self.value_index = random.randrange(8)
                 rsp = {
                     "value": self.values[self.value_index],  # 议案内容
                     "value_num": self.value_num,  # 议案编号
                     "acceptors": acceptors_random  # 表决者列表
                 }
                 self.value_num += 1
-                self.value_index += 1
 
             # 更新接收者列,将失败的acceptor删除，并重新随机分配一个不在失败列表里面的
             elif var["type"] == "renew":
@@ -251,7 +249,7 @@ class Proposer(threading.Thread):
                                                                      time.localtime(self.time_start)))
                 self.queue_send_list[acceptor].put(self.var)
             else:
-                print_str(self.name + "   >>>>>    发送决议失败")
+                print_str(self.name + "   >>>>>    发送提议失败")
 
             time.sleep(1 / random.randrange(1, 10))
 
@@ -292,8 +290,8 @@ class Acceptor(threading.Thread):
         :param value: 决议的值
         :return: 响应报文
         """
-        # 如果从来没接收过议案，跟新自身议案
-        if 0 == self.values["max"] and 0 == self.values["last"]:
+        # 如果从来没接收过议案，更新自身议案
+        if self.values["max"] == 0 and self.values["last"] == 0:
             self.values["max"] = value["V_num"]
             self.values["last"] = value["V_num"]
             self.values["value"] = value["Value"]
@@ -305,7 +303,7 @@ class Acceptor(threading.Thread):
                 "acceptor": self.num,
                 "time": value["time"]}
         else:
-            # 如果收到的议案大于承诺最低表决的议案，同意并告知之前表决结果
+            # 如果接收的议案编号大于承诺最低表决的议案编号，同意并告知之前表决结果
             if self.values["max"] < value["V_num"]:
                 self.values["max"] = value["V_num"]
                 res = {
@@ -315,36 +313,37 @@ class Acceptor(threading.Thread):
                     "value": self.values["value"],
                     "acceptor": self.num,
                     "time": value["time"]}
-            else:
-                # 如果收到的议案等于承诺最低表决的议案，完全同意议案，表决结束
-                if self.values["max"] == value["V_num"]:
+            elif self.values["max"] == value["V_num"]:
+                # 如果收到的议案编号等于承诺最低表决的议案编号，完全同意议案，表决结束
 
-                    self.values["last"] = value["V_num"]
-                    self.values["value"] = value["Value"]
-                    res = {
-                        "type": "accepting",
-                        "result": "chosen",
-                        "last": self.values["last"],
-                        "value": self.values["value"],
-                        "acceptor": self.num,
-                        "time": value["time"]
-                    }
-                else:
-                    # 如果收到的议案小于承诺最低表决的议案，直接拒绝
-                    res = {
-                        "type": "accepting",
-                        "result": "reject",
-                        "last": self.values["last"],
-                        "value": self.values["value"],
-                        "acceptor": self.num,
-                        "time": value["time"]
-                    }
+                self.values["last"] = value["V_num"]
+                self.values["value"] = value["Value"]
+                res = {
+                    "type": "accepting",
+                    "result": "chosen",
+                    "last": self.values["last"],
+                    "value": self.values["value"],
+                    "acceptor": self.num,
+                    "time": value["time"]
+                }
+            else:
+                # 如果收到的议案小于承诺最低表决的议案，直接拒绝
+                res = {
+                    "type": "accepting",
+                    "result": "reject",
+                    "last": self.values["last"],
+                    "value": self.values["value"],
+                    "acceptor": self.num,
+                    "time": value["time"]
+                }
         return res
 
 
 if __name__ == '__main__':
+
     q_to_proposers = []  # proposer通讯的消息队列
     q_to_acceptors = []  # acceptor通讯的消息队列
+    q_to_learners = []  # leaner通讯的消息队列
 
     q_leader_to_proposers = []
     q_to_leader = Queue()  # 接收请求的队列
@@ -355,6 +354,9 @@ if __name__ == '__main__':
 
     for i in range(0, acceptors_num):
         q_to_acceptors.append(Queue())
+
+    for i in range(0, learners_num):
+        q_to_learners.append(Queue())
 
     ld = Leader("Leader", q_to_leader, q_to_proposers, acceptors_num)
     ld.setDaemon(True)
