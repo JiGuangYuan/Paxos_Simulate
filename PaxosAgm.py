@@ -25,11 +25,11 @@ PACKET_LOSS = 20
 # 网络发送时延
 SEND_DELAY = 0
 # proposers的数量
-proposers_num = 3
+proposers_num = 5
 # acceptors的数量
-acceptors_num = 5
+acceptors_num = 10
 # learners的数量
-learners_num = 5
+learners_num = 10
 
 
 def print_str(string):
@@ -113,11 +113,12 @@ class Proposer(threading.Thread):
                         # (改进) proposer直接告之其它Proposer停止申请，设置proposer全局变量
                         for acceptor in self.acceptors:
                             self.var = {"status": "stop", "proposer": self.num}
-                            print_str("结束选举")
+                            print_str("结束选举,清空队列,发出结束信号")
+                            while not self.queue_send[acceptor].empty():
+                                self.queue_send[acceptor].get()
                             self.queue_send[acceptor].put(self.var)
-                    elif(self.accept > 0 or
-                            (len(self.acceptors) > self.chosen > 0 and self.reject == 0) or
-                            (self.accept == 0 and self.chosen == 0 and self.reject == 0)):
+                    elif (self.accept > 0 or (len(self.acceptors) > self.chosen > 0 and self.reject == 0) or (
+                                        self.accept == 0 and self.chosen == 0 and self.reject == 0)):
                         # 网络原因获取回应失败，重新开始申请
                         self.reject = 0
                         self.chosen = 0
@@ -216,6 +217,8 @@ class Acceptor(threading.Thread):
         self.queue_recv = queue_from_proposer
         self.queue_send = queue_to_proposers
         self.num = m_num
+        self.proposers = range(proposers_num)
+        self.isStart = True
         self.values = {
             "last": 0,  # 最后一次表决的申请编号
             "value": "",  # 最后一次表决的申请的内容
@@ -226,7 +229,14 @@ class Acceptor(threading.Thread):
         while True:
             try:
                 var = self.queue_recv.get(False, 1)
-                rsp = self.process_propose(var)
+
+                if self.isStart:
+                    rsp = self.process_propose(var)
+                    if self.isStart:
+                        self.queue_send[var["proposer"]].put(rsp)
+                    else:
+                        for proposer in self.proposers:
+                            self.queue_send[proposer].put(rsp)
                 '''
                 # 有概率发送失败
                 if random.randrange(100) < (100 - PACKET_LOSS):
@@ -234,7 +244,6 @@ class Acceptor(threading.Thread):
                 else:
                     print_str(self.name + "   >>>>>    发送审批失败")
                 '''
-                self.queue_send[var["proposer"]].put(rsp)
             except Empty:
                 continue
 
@@ -245,6 +254,7 @@ class Acceptor(threading.Thread):
         :return: 响应报文
         """
         if value["status"] == "stop":
+            self.isStart = False
             res = {"type": "stop"}
         # 如果从来没接收过申请，更新自身申请
         elif self.values["max"] == 0 and self.values["last"] == 0:
@@ -385,7 +395,6 @@ class Learner(threading.Thread):
             try:
                 rsp = {}
                 var = self.queue_recv.get(False, 1)
-                print_str("----------------------------------------------------------------------------------")
                 print_str(var)
                 if var["type"] == "prepare":
                     # 接收到prepare信息，则发送ready信号回去
