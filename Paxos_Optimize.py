@@ -50,25 +50,25 @@ class Proposer(threading.Thread):
     议案的提出者，负责提出议案并等待各个接收者的表决
     """
 
-    def __init__(self, t_name, queue_from_acceptor, queue_to_acceptors, p_num):
+    def __init__(self, th_name, queue_from_acceptor, queue_to_acceptors, proposer_id):
         """
         构造函数
-        :param t_name: Proposer名称
+        :param th_name: Proposer名称
         :param queue_from_acceptor: Proposer接收消息队列
         :param queue_to_acceptors: Proposer和acceptor通讯的消息队列
-        :param p_num: Proposer ID号
+        :param proposer_id: Proposer ID号
         """
-        threading.Thread.__init__(self, name=t_name)
+        threading.Thread.__init__(self, name=th_name)
         self.queue_recv = queue_from_acceptor
         self.queue_send = queue_to_acceptors
-        self.num = p_num  # proposer的id
-        self.reject = 0  # 拒绝的acceptor计数
-        self.accept = 0  # 接受的acceptor计数
-        self.chosen = 0  # 选择的acceptor计数
+        self.id = proposer_id  # proposer的id
+        self.reject_num = 0  # 拒绝的acceptor计数
+        self.accept_num = 0  # 接受的acceptor计数
+        self.chosen_num = 0  # 选择的acceptor计数
         self.start_propose = False  # proposer开始标志
         self.fail_list = []  # 超时失效的消息队列
-        self.v_num = 100 + self.num  # 申请的编号
-        self.value = t_name + "申请成为leader"  # 申请的内容
+        self.v_num = 100 + self.id  # 申请的编号
+        self.value = th_name + "申请成为leader"  # 申请的内容
         self.acceptors = range(acceptors_num)  # acceptors的列表
         self.var = {}  # 发送的消息
         self.time_start = 0
@@ -88,21 +88,21 @@ class Proposer(threading.Thread):
                 # 投票结束了
                 if self.start_propose is True and time.time() - self.time_start > OVER_TIME:
                     print_str("#######  " + self.name + "的本次申请" + self.value + "投票结束，Accept:" + str(
-                        self.accept) + " ,Reject:" + str(
-                        self.reject) + " ,Chosen: " + str(self.chosen))
+                        self.accept_num) + " ,Reject:" + str(
+                        self.reject_num) + " ,Chosen: " + str(self.chosen_num))
                     self.start_propose = False
                     # 判断投票结果
-                    if self.reject > 0:
+                    if self.reject_num > 0:
                         # 如果有一个拒绝则被否决
                         print_str(
                             "-------------    " + self.name + "的申请" + self.value + "被否决，重新申请    ---------------")
-                        self.reject = 0
-                        self.chosen = 0
-                        self.accept = 0
+                        self.reject_num = 0
+                        self.chosen_num = 0
+                        self.accept_num = 0
                         self.send_propose()
                         continue
                         # if self.chosen > len(self.acceptors) / 2:
-                    elif self.chosen == len(self.acceptors):
+                    elif self.chosen_num == len(self.acceptors):
                         # 如果超过半数chosen则被同意
                         print_str(
                             ">>>>>>>>>>>>>>>    " + self.name + "的申请" + self.value + "被同意，完成表决过程    <<<<<<<<<<<<<<<")
@@ -112,17 +112,18 @@ class Proposer(threading.Thread):
                         ld.start()
                         # (改进) proposer直接告之其它Proposer停止申请，设置proposer全局变量
                         for acceptor in self.acceptors:
-                            self.var = {"status": "stop", "proposer": self.num}
+                            self.var = {"status": "stop", "proposer_id": self.id}
                             print_str("结束选举,清空队列,发出结束信号")
                             while not self.queue_send[acceptor].empty():
                                 self.queue_send[acceptor].get()
                             self.queue_send[acceptor].put(self.var)
-                    elif (self.accept > 0 or (len(self.acceptors) > self.chosen > 0 and self.reject == 0) or (
-                                        self.accept == 0 and self.chosen == 0 and self.reject == 0)):
+                    elif (self.accept_num > 0 or (
+                                len(self.acceptors) > self.chosen_num > 0 and self.reject_num == 0) or (
+                                        self.accept_num == 0 and self.chosen_num == 0 and self.reject_num == 0)):
                         # 网络原因获取回应失败，重新开始申请
-                        self.reject = 0
-                        self.chosen = 0
-                        self.accept = 0
+                        self.reject_num = 0
+                        self.chosen_num = 0
+                        self.accept_num = 0
                         self.send_propose()
                 continue
 
@@ -143,10 +144,10 @@ class Proposer(threading.Thread):
             if time.time() - self.time_start < OVER_TIME:
                 if var["result"] == "reject":
                     # 拒绝的申请编号+1
-                    self.reject += 1
+                    self.reject_num += 1
                     self.v_num = var["max_val"] + 1
                 elif var["result"] == "accept":
-                    self.accept += 1
+                    self.accept_num += 1
                     """
                     # 修改决议为acceptor建议的决议
                     self.value = var["value"]
@@ -155,16 +156,16 @@ class Proposer(threading.Thread):
                         "type": "proposing",
                         "V_num": self.v_num,
                         "Value": var["value"],
-                        "proposer": self.num
+                        "proposer_id": self.num
                     }
 
                     """
                 elif var["result"] == "chosen":
-                    self.chosen += 1
+                    self.chosen_num += 1
             else:
                 # 超时接收,则丢弃
                 print_str("消息报文超时失效，丢弃...")
-                self.fail_list.append(var["acceptor"])
+                self.fail_list.append(var["acceptor_id"])
 
     def send_propose(self):
         """
@@ -185,7 +186,7 @@ class Proposer(threading.Thread):
                     "type": "proposing",
                     "V_num": self.v_num,
                     "Value": self.value,
-                    "proposer": self.num,
+                    "proposer_id": self.id,
                     "time": self.time_start
                 }
                 print_str(
@@ -205,18 +206,18 @@ class Acceptor(threading.Thread):
     负责接收proposer的申请进行表决
     """
 
-    def __init__(self, t_name, queue_from_proposer, queue_to_proposers, m_num):
+    def __init__(self, th_name, queue_from_proposer, queue_to_proposers, acceptor_id):
         """
         构造函数
-        :param t_name: Acceptor的名称
+        :param th_name: Acceptor的名称
         :param queue_from_proposer: 从proposer收到的消息队列
         :param queue_to_proposers: 向proposer发送的消息队列
-        :param m_num: acceptor的ID
+        :param acceptor_id: acceptor的ID
         """
-        threading.Thread.__init__(self, name=t_name)
+        threading.Thread.__init__(self, name=th_name)
         self.queue_recv = queue_from_proposer
         self.queue_send = queue_to_proposers
-        self.num = m_num
+        self.id = acceptor_id
         self.proposers = range(proposers_num)
         self.isStart = True
         self.values = {
@@ -233,14 +234,14 @@ class Acceptor(threading.Thread):
                 if self.isStart:
                     rsp = self.process_propose(var)
                     if self.isStart:
-                        self.queue_send[var["proposer"]].put(rsp)
+                        self.queue_send[var["proposer_id"]].put(rsp)
                     else:
                         for proposer in self.proposers:
                             self.queue_send[proposer].put(rsp)
                 '''
                 # 有概率发送失败
                 if random.randrange(100) < (100 - PACKET_LOSS):
-                    self.queue_send[var["proposer"]].put(rsp)
+                    self.queue_send[var["proposer_id"]].put(rsp)
                 else:
                     print_str(self.name + "   >>>>>    发送审批失败")
                 '''
@@ -266,7 +267,7 @@ class Acceptor(threading.Thread):
                 "result": "accept",
                 "last": 0,
                 "value": self.values["value"],
-                "acceptor": self.num,
+                "acceptor_id": self.id,
                 "time": value["time"]}
         else:
             # 如果接收的申请编号大于承诺最低表决的申请编号，同意并告知之前表决结果
@@ -277,7 +278,7 @@ class Acceptor(threading.Thread):
                     "result": "accept",
                     "last": self.values["last"],
                     "value": self.values["value"],
-                    "acceptor": self.num,
+                    "acceptor_id": self.id,
                     "time": value["time"]}
             elif self.values["max"] == value["V_num"]:
                 # 如果收到的申请编号等于承诺最低表决的申请编号，完全同意申请，表决结束
@@ -288,7 +289,7 @@ class Acceptor(threading.Thread):
                     "result": "chosen",
                     "last": self.values["last"],
                     "value": self.values["value"],
-                    "acceptor": self.num,
+                    "acceptor_id": self.id,
                     "time": value["time"]
                 }
             else:
@@ -299,7 +300,7 @@ class Acceptor(threading.Thread):
                     "result": "reject",
                     "last": self.values["last"],
                     "value": self.values["value"],
-                    "acceptor": self.num,
+                    "acceptor_id": self.id,
                     "time": value["time"]
                 }
         return res
@@ -311,15 +312,15 @@ class Leader(threading.Thread):
     决议的提出者，负责提出决议并等待各个Leaner表决
     """
 
-    def __init__(self, t_name, queue_from_learner, queue_to_learner):
+    def __init__(self, th_name, queue_from_learner, queue_to_learner):
         """
         构造函数
-        :param t_name: Leader名称
+        :param th_name: Leader名称
         :param queue_from_learner: Leader从learner接收请求的队列
         :param queue_to_learner: 和learner通讯的消息队列
         """
 
-        threading.Thread.__init__(self, name=t_name)
+        threading.Thread.__init__(self, name=th_name)
         self.queue_recv = queue_from_learner
         self.queue_send = queue_to_learner
         self.recv_ack_num = 0
@@ -355,7 +356,7 @@ class Leader(threading.Thread):
                 # 获取ready信息
                 if var["type"] == "ready":
                     # 发送commit信号给learner
-                    self.queue_send[var["id"]].put(rsp)
+                    self.queue_send[var["learner_id"]].put(rsp)
                     print_str("发送 commit 信号")
                 # （改进） 如果没有接收到learner的全部回应，则立即重新发送prepare请求
                 # 获取ack成功
@@ -375,19 +376,19 @@ class Learner(threading.Thread):
     Learner负责响应Leader 的决议，并执行决议
     """
 
-    def __init__(self, t_name, queue_from_leader, queue_to_leader, l_num):
+    def __init__(self, th_name, queue_from_leader, queue_to_leader, learner_id):
         """
         构造函数
-        :param t_name:  Learner的名称
-        :param queue_from_leader:   从leader传来的消息队列
-        :param queue_to_leader:   向leader发送的消息队列
-        :param l_num:    l ID
+        :param th_name:  Learner的名称
+        :param queue_from_leader: 从leader传来的消息队列
+        :param queue_to_leader: 向leader发送的消息队列
+        :param learner_id: Learner ID
         :return:
         """
-        threading.Thread.__init__(self, name=t_name)
+        threading.Thread.__init__(self, name=th_name)
         self.queue_recv = queue_from_leader
         self.queue_send = queue_to_leader
-        self.num = l_num
+        self.id = learner_id
 
     def run(self):
 
@@ -399,7 +400,7 @@ class Learner(threading.Thread):
                 if var["type"] == "prepare":
                     # 接收到prepare信息，则发送ready信号回去
                     rsp = {"type": "ready",
-                           "id": self.num}  # 发送ready响应信号回去
+                           "learner_id": self.id}  # 发送ready响应信号回去
                 elif var["type"] == "commit":
                     # 如果接收到leader发出的commit请求，则开始开始执行请求
                     rsp = {"type": "ack"}  # 发送ack响应信号回去
