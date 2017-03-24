@@ -30,6 +30,10 @@ proposers_num = 5
 acceptors_num = 10
 # learners的数量
 learners_num = 10
+# 发送消息数
+send_msg_num = 0
+# 提交失败数
+fail_msg_num = 0
 
 
 def print_str(string):
@@ -74,9 +78,12 @@ class Proposer(threading.Thread):
         self.time_start = 0
 
     def run(self):
+        global send_msg_num
+        global fail_msg_num
         # 给自己发送一个start信号
         start_sig = {"type": "start"}
         self.queue_recv.put(start_sig)
+        send_msg_num += 1
         # 循环接收从acceptor过来的消息
         while True:
             try:
@@ -117,8 +124,9 @@ class Proposer(threading.Thread):
                             while not self.queue_send[acceptor].empty():
                                 self.queue_send[acceptor].get()
                             self.queue_send[acceptor].put(self.var)
+                            send_msg_num += 1
                     elif (self.accept_num > 0 or (
-                                len(self.acceptors) > self.chosen_num > 0 and self.reject_num == 0) or (
+                                        len(self.acceptors) > self.chosen_num > 0 and self.reject_num == 0) or (
                                         self.accept_num == 0 and self.chosen_num == 0 and self.reject_num == 0)):
                         # 网络原因获取回应失败，重新开始申请
                         self.reject_num = 0
@@ -165,6 +173,7 @@ class Proposer(threading.Thread):
             else:
                 # 超时接收,则丢弃
                 print_str("消息报文超时失效，丢弃...")
+                fail_msg_num += 1
                 self.fail_list.append(var["acceptor_id"])
 
     def send_propose(self):
@@ -172,6 +181,8 @@ class Proposer(threading.Thread):
         发送一次申请给所有acceptor
         :return:
         """
+        global send_msg_num
+        global fail_msg_num
         self.time_start = time.time()
         self.start_propose = True
         # 模拟发送时延50ms-1000ms
@@ -194,8 +205,10 @@ class Proposer(threading.Thread):
                     self.var["Value"] + " ,日期：" + time.strftime("%Y-%m-%d %H:%M:%S",
                                                                 time.localtime(self.time_start)))
                 self.queue_send[acceptor].put(self.var)
+                send_msg_num += 1
             else:
                 print_str(self.name + "   >>>>>    发送申请失败")
+                fail_msg_num += 1
 
             time.sleep(1 / random.randrange(1, 10))
 
@@ -226,7 +239,8 @@ class Acceptor(threading.Thread):
             "max": 0}  # 承诺的最低表决申请编号
 
     def run(self):
-
+        global send_msg_num
+        global fail_msg_num
         while True:
             try:
                 var = self.queue_recv.get(False, 1)
@@ -235,9 +249,11 @@ class Acceptor(threading.Thread):
                     rsp = self.process_propose(var)
                     if self.isStart:
                         self.queue_send[var["proposer_id"]].put(rsp)
+                        send_msg_num += 1
                     else:
                         for proposer in self.proposers:
                             self.queue_send[proposer].put(rsp)
+                            send_msg_num += 1
                 '''
                 # 有概率发送失败
                 if random.randrange(100) < (100 - PACKET_LOSS):
@@ -336,12 +352,14 @@ class Leader(threading.Thread):
         self.value_num = 1
 
     def run(self):
-
+        global send_msg_num
+        global fail_msg_num
         rsp = {"type": "prepare"}
         for n in range(0, learners_num):
             # 发送prepare信号给learner
             self.queue_send[n].put(rsp)
             print_str("发送 prepare 信号")
+            send_msg_num += 1
         index = random.randrange(8)
         while True:
 
@@ -357,6 +375,7 @@ class Leader(threading.Thread):
                 if var["type"] == "ready":
                     # 发送commit信号给learner
                     self.queue_send[var["learner_id"]].put(rsp)
+                    send_msg_num += 1
                     print_str("发送 commit 信号")
                 # （改进） 如果没有接收到learner的全部回应，则立即重新发送prepare请求
                 # 获取ack成功
@@ -366,6 +385,10 @@ class Leader(threading.Thread):
                         self.recv_ack_num = 0
                         # 如果接收全部learner的ack回应，则表示成功
                         print_str(">>>>>>>>这次分布式一致性决议,完成<<<<<<<<<")
+                        end_time = time.time()
+                        print_str("决议完成一共耗时" + str(round(end_time - start_time)) + "秒")
+                        print_str("决议完成一共提交消息数" + str(send_msg_num))
+                        print_str("决议完成一共提交消息失败数" + str(fail_msg_num))
                         # 如果没有接收到全部learner的ack回应，则重复此过程
             except Empty:
                 continue
@@ -391,7 +414,8 @@ class Learner(threading.Thread):
         self.id = learner_id
 
     def run(self):
-
+        global send_msg_num
+        global fail_msg_num
         while True:
             try:
                 rsp = {}
@@ -411,18 +435,18 @@ class Learner(threading.Thread):
                     # else:
                     #     print_str(self.name + "   >>>>>    发送回应失败")
                 self.queue_send.put(rsp)
+                send_msg_num += 1
                 print_str("发送回应")
             except Empty:
                 continue
 
 
 if __name__ == '__main__':
-
     q_to_proposers = []  # proposer通讯的消息队列
     q_to_acceptors = []  # acceptor通讯的消息队列
     q_to_learners = []  # learner通讯的消息队列
     q_to_leader = Queue()  # leader通讯的消息队列
-
+    start_time = time.time()
     for i in range(0, proposers_num):
         q_to_proposers.append(Queue())
         proposer_th = Proposer("proposer'" + str(i) + "'", q_to_proposers[i], q_to_acceptors, i)
