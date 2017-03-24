@@ -173,7 +173,6 @@ class Proposer(threading.Thread):
             else:
                 # 超时接收,则丢弃
                 print_str("消息报文超时失效，丢弃...")
-                fail_msg_num += 1
                 self.fail_list.append(var["acceptor_id"])
 
     def send_propose(self):
@@ -241,19 +240,17 @@ class Acceptor(threading.Thread):
     def run(self):
         global send_msg_num
         global fail_msg_num
-        while True:
+        while self.isStart:
             try:
                 var = self.queue_recv.get(False, 1)
-
+                rsp = self.process_propose(var)
                 if self.isStart:
-                    rsp = self.process_propose(var)
-                    if self.isStart:
-                        self.queue_send[var["proposer_id"]].put(rsp)
+                    self.queue_send[var["proposer_id"]].put(rsp)
+                    send_msg_num += 1
+                else:
+                    for proposer in self.proposers:
+                        self.queue_send[proposer].put(rsp)
                         send_msg_num += 1
-                    else:
-                        for proposer in self.proposers:
-                            self.queue_send[proposer].put(rsp)
-                            send_msg_num += 1
                 '''
                 # 有概率发送失败
                 if random.randrange(100) < (100 - PACKET_LOSS):

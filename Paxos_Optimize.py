@@ -54,17 +54,21 @@ class Proposer(threading.Thread):
     议案的提出者，负责提出议案并等待各个接收者的表决
     """
 
-    def __init__(self, th_name, queue_from_acceptor, queue_to_acceptors, proposer_id):
+    def __init__(self, th_name, queue_from_acceptor, queue_to_acceptors, queue_to_proposers, proposer_id):
         """
         构造函数
         :param th_name: Proposer名称
         :param queue_from_acceptor: Proposer接收消息队列
         :param queue_to_acceptors: Proposer和acceptor通讯的消息队列
+        :param queue_to_proposers: Proposer和其它Proposers通讯的消息队列
         :param proposer_id: Proposer ID号
+
         """
         threading.Thread.__init__(self, name=th_name)
         self.queue_recv = queue_from_acceptor
         self.queue_send = queue_to_acceptors
+        self.queue_send_proposer = queue_to_proposers
+        self.queue_recv_proposer = queue_to_proposers[proposer_id]
         self.id = proposer_id  # proposer的id
         self.reject_num = 0  # 拒绝的acceptor计数
         self.accept_num = 0  # 接受的acceptor计数
@@ -76,6 +80,7 @@ class Proposer(threading.Thread):
         self.acceptors = range(acceptors_num)  # acceptors的列表
         self.var = {}  # 发送的消息
         self.time_start = 0
+        self.isStart = True
 
     def run(self):
         global send_msg_num
@@ -85,8 +90,14 @@ class Proposer(threading.Thread):
         self.queue_recv.put(start_sig)
         send_msg_num += 1
         # 循环接收从acceptor过来的消息
-        while True:
+        while self.isStart:
             try:
+                try:
+                    var = self.queue_recv_proposer.get(False)
+                    if var["type"] == "stop":
+                        self.isStart = False
+                except Empty:
+                    pass
                 # 阻塞调用,至多阻塞1秒
                 var = self.queue_recv.get(True, 1)
                 # 接收到消息，准备处理
@@ -106,6 +117,8 @@ class Proposer(threading.Thread):
                         self.reject_num = 0
                         self.chosen_num = 0
                         self.accept_num = 0
+                        # 被拒绝之后需要延迟一段时间发送，避免冲突
+                        time.sleep(random.randrange(3, 7))
                         self.send_propose()
                         continue
                         # if self.chosen > len(self.acceptors) / 2:
@@ -118,12 +131,10 @@ class Proposer(threading.Thread):
                         ld = Leader("Leader", q_to_leader, q_to_learners)
                         ld.start()
                         # (改进) proposer直接告之其它Proposer停止申请，设置proposer全局变量
-                        for acceptor in self.acceptors:
-                            self.var = {"status": "stop", "proposer_id": self.id}
-                            print_str("结束选举,清空队列,发出结束信号")
-                            while not self.queue_send[acceptor].empty():
-                                self.queue_send[acceptor].get()
-                            self.queue_send[acceptor].put(self.var)
+                        for proposer in range(proposers_num):
+                            print_str("结束选举,清空队列，直接通知其它proposer结束")
+                            var = {"type": "stop"}
+                            self.queue_send_proposer[proposer].put(var)
                             send_msg_num += 1
                     elif (self.accept_num > 0 or (
                                         len(self.acceptors) > self.chosen_num > 0 and self.reject_num == 0) or (
@@ -173,7 +184,6 @@ class Proposer(threading.Thread):
             else:
                 # 超时接收,则丢弃
                 print_str("消息报文超时失效，丢弃...")
-                fail_msg_num += 1
                 self.fail_list.append(var["acceptor_id"])
 
     def send_propose(self):
@@ -209,7 +219,7 @@ class Proposer(threading.Thread):
             else:
                 print_str(self.name + "   >>>>>    发送申请失败")
                 fail_msg_num += 1
-
+            # 模拟网路传输延迟
             time.sleep(1 / random.randrange(1, 10))
 
 
@@ -445,11 +455,14 @@ if __name__ == '__main__':
     q_to_proposers = []  # proposer通讯的消息队列
     q_to_acceptors = []  # acceptor通讯的消息队列
     q_to_learners = []  # learner通讯的消息队列
+    q_proposer_to_proposers = []  # proposer和其它proposer的消息队列
     q_to_leader = Queue()  # leader通讯的消息队列
     start_time = time.time()
     for i in range(0, proposers_num):
         q_to_proposers.append(Queue())
-        proposer_th = Proposer("proposer'" + str(i) + "'", q_to_proposers[i], q_to_acceptors, i)
+        q_proposer_to_proposers.append(Queue())
+        proposer_th = Proposer("proposer'" + str(i) + "'", q_to_proposers[i], q_to_acceptors, q_proposer_to_proposers,
+                               i)
         proposer_th.setDaemon(True)
         proposer_th.start()
 
