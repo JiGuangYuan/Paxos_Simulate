@@ -34,6 +34,9 @@ learners_num = 10
 send_msg_num = 0
 # 提交失败数
 fail_msg_num = 0
+# 模拟宕机的个数
+crash_num = 0
+crash_list = random.sample(range(acceptors_num), crash_num)
 
 
 def print_str(string):
@@ -389,8 +392,7 @@ class Leader(threading.Thread):
                     }
                     if time.time() - self.time_start < OVER_TIME:
                         self.recv_ready_num += 1
-                        if self.recv_ready_num > round(learners_num / 2):
-                            self.recv_ready_num = 0
+                        if self.recv_ack_num == learners_num:
                             # 发送commit信号给learner
                             for n in range(learners_num):
                                 self.queue_send[n].put(rsp)
@@ -407,9 +409,8 @@ class Leader(threading.Thread):
                 elif var["type"] == "ack":
                     if time.time() - self.time_start < OVER_TIME:
                         self.recv_ack_num += 1
-                        if self.recv_ack_num > round(learners_num / 2):
-                            self.recv_ack_num = 0
-                            # 如果接收超过半数的learner的ack回应，则表示成功
+                        if self.recv_ack_num == learners_num:
+                            # 如果接收全部的learner的ack回应，则表示成功
                             print_str(">>>>>>>>这次分布式一致性决议,完成<<<<<<<<<")
                             end_time = time.time()
                             print_str("耗时:" + str(round(end_time - start_time)) + "秒")
@@ -446,7 +447,8 @@ class Learner(threading.Thread):
     def run(self):
         global send_msg_num
         global fail_msg_num
-        while True:
+        # 模拟宕机状态，如果
+        while self.id not in crash_list:
             try:
                 rsp = {}
                 var = self.queue_recv.get(False)
@@ -460,9 +462,6 @@ class Learner(threading.Thread):
                 elif var["type"] == "commit":
                     # 如果接收到leader发出的commit请求，则开始开始执行请求
                     rsp = {"type": "ack"}  # 发送ack响应信号回去
-
-                    # 判断状态发送reject信号回去
-                    # rsp = {"type": "reject"}
 
                     # 有概率发送失败
                     # if random.randrange(100) < (100 - PACKET_LOSS):
