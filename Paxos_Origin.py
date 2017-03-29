@@ -80,6 +80,7 @@ class Proposer(threading.Thread):
         self.promise_num = 0  # 承若的acceptor计数
         self.reject_num = 0  # 拒绝的acceptor计数
         self.ack_num = 0  # 同意的acceptor计数
+        self.nack_num = 0  # 不同意的acceptor计数
         self.start_propose = False  # proposer开始标志
         self.fail_list = []  # 超时失效的消息队列
         self.v_num = 100 + self.id  # 申请的编号
@@ -105,14 +106,14 @@ class Proposer(threading.Thread):
                 # 接收到消息，准备处理
                 self.process_msg(var)
             except Empty:
-                # 投票结束了
+                # 本次投票结束了
                 if self.start_propose is True and time.time() - self.time_start > OVER_TIME:
                     print_str(self.value + "投票结束，Promise:" + str(
                         self.promise_num) + " ,Reject:" + str(
-                        self.reject_num) + " ,Ack: " + str(self.ack_num))
+                        self.reject_num) + " ,ack" + str(self.ack_num) + " ,nack" + str(self.nack_num))
                     self.start_propose = False
                     # 判断投票结果
-                    if self.reject_num > 0:
+                    if self.reject_num > 0 or self.nack_num > 0:
                         # 如果有一个拒绝则被否决
                         print_str(
                             "-------------    " + self.name + "的申请" + self.value + "被否决，重新申请    ---------------")
@@ -120,10 +121,8 @@ class Proposer(threading.Thread):
                         self.reject_num = 0
                         self.ack_num = 0
                         self.send_propose()
-                        continue
-                        # self.ack_num > round(len(self.acceptors) / 2):
-                    elif self.ack_num == len(self.acceptors):
-                        # 如果超过半数chosen则被同意
+                    # 如果超过半数ack 则说明申请已经被acceptor同意
+                    elif self.ack_num > round(len(self.acceptors) / 2):
                         print_str(
                             ">>>>>>>>>>>>>>>    " + self.value + "被同意，完成投票过程    <<<<<<<<<<<<<<<")
                         print_str("-------------------------- " + self.name + "：成为了Leader-----------------------")
@@ -138,15 +137,32 @@ class Proposer(threading.Thread):
                                 self.queue_send[acceptor].get()
                             self.queue_send[acceptor].put(self.var)
                             send_msg_num += 1
-                    elif (self.promise_num > 0 or (
-                                        len(self.acceptors) > self.ack_num > 0 and self.reject_num == 0) or (
-                                        self.promise_num == 0 and self.ack_num == 0 and self.reject_num == 0)):
+                    # 如果超过半数promise则向acceptor发送decide信号
+                    elif self.promise_num > round(len(self.acceptors) / 2):
+                        self.time_start = 0
+                        for acceptor in self.acceptors:
+                            # 提出申请，有概率发送失败
+                            if random.randrange(100) < (100 - PACKET_LOSS):
+                                self.var = {
+                                    "status": "start",
+                                    "type": "decide",
+                                    "V_num": self.v_num,
+                                    "Value": self.value,
+                                    "proposer_id": self.id,
+                                }
+                                print_str(" 编号：" + str(self.v_num) + " ，决议：" + self.var["Value"])
+                                self.queue_send[acceptor].put(self.var)
+                                send_msg_num += 1
+                            else:
+                                print_str(self.name + "   >>>>>    发送决定失败")
+                                fail_msg_num += 1
+                    else:
                         # 网络原因获取回应失败，重新开始申请
                         self.promise_num = 0
                         self.reject_num = 0
                         self.ack_num = 0
                         self.send_propose()
-                continue
+                    continue
 
     def process_msg(self, var):
         """
@@ -165,7 +181,6 @@ class Proposer(threading.Thread):
         # 如果是acceptor过来的报文，解析报文
         elif var["type"] == "accepting":
             if time.time() - self.time_start < OVER_TIME:
-
                 if var["result"] == "promise":
                     self.promise_num += 1
                     """
@@ -184,13 +199,17 @@ class Proposer(threading.Thread):
                     # 拒绝的申请编号+1
                     self.reject_num += 1
                     self.v_num = var["max_val"] + 1
-                elif var["result"] == "ack":
-                    self.ack_num += 1
             else:
                 # 超时接收,则丢弃
                 print_str("消息报文超时失效，丢弃...")
                 self.fail_list.append(var["acceptor_id"])
                 fail_msg_num += 1
+        elif var["type"] == "deciding":
+            if time.time() - self.time_start < OVER_TIME:
+                if var["result"] == "ack":
+                    self.ack_num += 1
+                elif var["result"] == "nack":
+                    self.nack_num += 1
 
     def send_propose(self):
         """
@@ -214,10 +233,9 @@ class Proposer(threading.Thread):
                     "V_num": self.v_num,
                     "Value": self.value,
                     "proposer_id": self.id,
-                    "time": self.time_start
                 }
                 print_str(
-                    self.name + "   >>>>>    " + "类型：" + self.var["type"] + " ，编号：" + str(self.v_num) + " ，决议：" +
+                    self.name + "   >>>>>    编号：" + str(self.v_num) + " ，决议：" +
                     self.var["Value"] + " ,日期：" + time.strftime("%Y-%m-%d %H:%M:%S",
                                                                 time.localtime(self.time_start)))
                 self.queue_send[acceptor].put(self.var)
@@ -284,56 +302,68 @@ class Acceptor(threading.Thread):
         :param value: 决议的值
         :return: 响应报文
         """
+        res = {}
         if value["status"] == "stop":
             self.isStart = False
             res = {"type": "stop"}
-        # 如果从来没接收过申请，更新自身申请
-        elif self.values["max"] == 0 and self.values["last"] == 0:
-            self.values["max"] = value["V_num"]
-            self.values["last"] = value["V_num"]
-            self.values["value"] = value["Value"]
-            res = {
-                "type": "accepting",
-                "result": "promise",
-                "last": 0,
-                "value": self.values["value"],
-                "acceptor_id": self.id,
-                "time": value["time"]}
-        else:
-            # 如果接收的申请编号大于承诺最低表决的申请编号，同意并告知之前表决结果
-            if self.values["max"] < value["V_num"]:
+        # 第一阶段申请阶段
+        elif value["type"] == "proposing":
+            # 如果从来没接收过申请，更新自身申请
+            if self.values["max"] == 0 and self.values["last"] == 0:
                 self.values["max"] = value["V_num"]
-                res = {
-                    "type": "accepting",
-                    "result": "promise",
-                    "last": self.values["last"],
-                    "value": self.values["value"],
-                    "acceptor_id": self.id,
-                    "time": value["time"]}
-            elif self.values["max"] == value["V_num"]:
-                # 如果收到的申请编号等于承诺最低表决的申请编号，完全同意申请，表决结束
                 self.values["last"] = value["V_num"]
                 self.values["value"] = value["Value"]
                 res = {
                     "type": "accepting",
+                    "result": "promise",
+                    "last": 0,
+                    "value": self.values["value"],
+                    "acceptor_id": self.id
+                }
+            else:
+                # 如果接收的申请编号大于承诺最低表决的申请编号，同意并告知之前表决结果
+                if self.values["max"] < value["V_num"]:
+                    self.values["max"] = value["V_num"]
+                    res = {
+                        "type": "accepting",
+                        "result": "promise",
+                        "last": self.values["last"],
+                        "value": self.values["value"],
+                        "acceptor_id": self.id
+                    }
+                else:
+                    # 如果收到的申请小于承诺最低表决的申请，直接拒绝
+                    res = {
+                        "max_val": self.values["max"],
+                        "type": "accepting",
+                        "result": "reject",
+                        "last": self.values["last"],
+                        "value": self.values["value"],
+                        "acceptor_id": self.id
+                    }
+        # 第二阶段确定阶段
+        elif value["type"] == "decide":
+            if self.values["max"] == value["V_num"]:
+                # 如果收到的申请编号等于承诺最低表决的申请编号，完全同意申请，表决结束
+                self.values["last"] = value["V_num"]
+                self.values["value"] = value["Value"]
+                res = {
+                    "type": "deciding",
                     "result": "ack",
                     "last": self.values["last"],
                     "value": self.values["value"],
-                    "acceptor_id": self.id,
-                    "time": value["time"]
+                    "acceptor_id": self.id
                 }
             else:
                 # 如果收到的申请小于承诺最低表决的申请，直接拒绝
                 res = {
                     "max_val": self.values["max"],
-                    "type": "accepting",
-                    "result": "reject",
+                    "type": "deciding",
+                    "result": "nack",
                     "last": self.values["last"],
                     "value": self.values["value"],
-                    "acceptor_id": self.id,
-                    "time": value["time"]
+                    "acceptor_id": self.id
                 }
-
         return res
 
 
@@ -465,7 +495,6 @@ class Learner(threading.Thread):
                 elif var["type"] == "commit":
                     # 如果接收到leader发出的commit请求，则开始开始执行请求
                     rsp = {"type": "ack"}  # 发送ack响应信号回去
-
                     # 有概率发送失败
                     # if random.randrange(100) < (100 - PACKET_LOSS):
                     #     self.queue_to_learner.put(rsp)
