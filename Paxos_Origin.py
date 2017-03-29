@@ -107,7 +107,7 @@ class Proposer(threading.Thread):
             except Empty:
                 # 投票结束了
                 if self.start_propose is True and time.time() - self.time_start > OVER_TIME:
-                    print_str("#######  " + self.name + "的本次申请" + self.value + "投票结束，Promise:" + str(
+                    print_str(self.value + "投票结束，Promise:" + str(
                         self.promise_num) + " ,Reject:" + str(
                         self.reject_num) + " ,Ack: " + str(self.ack_num))
                     self.start_propose = False
@@ -121,11 +121,23 @@ class Proposer(threading.Thread):
                         self.ack_num = 0
                         self.send_propose()
                         continue
-                    elif self.promise_num > round(len(self.acceptors) / 2):
-                        # 如果超过半数ack则被同意
-                            else:
-                                print_str(self.name + "   >>>>>    发送申请失败")
-                                fail_msg_num += 1
+                        # if self.chosen > len(self.acceptors) / 2:
+                    elif self.ack_num > round(len(self.acceptors) / 2):
+                        # 如果超过半数chosen则被同意
+                        print_str(
+                            ">>>>>>>>>>>>>>>    " + self.value + "被同意，完成投票过程    <<<<<<<<<<<<<<<")
+                        print_str("-------------------------- " + self.name + "：成为了Leader-----------------------")
+                        # Proposer竞争为leader成功，启动leader进程
+                        ld = Leader("Leader", q_to_leader, q_to_learners)
+                        ld.start()
+                        # (改进) proposer直接告之其它Proposer停止申请，设置proposer全局变量
+                        for acceptor in self.acceptors:
+                            self.var = {"status": "stop", "proposer_id": self.id}
+                            print_str("结束选举,清空队列,发出结束信号")
+                            while not self.queue_send[acceptor].empty():
+                                self.queue_send[acceptor].get()
+                            self.queue_send[acceptor].put(self.var)
+                            send_msg_num += 1
                     elif (self.promise_num > 0 or (
                                         len(self.acceptors) > self.ack_num > 0 and self.reject_num == 0) or (
                                         self.promise_num == 0 and self.ack_num == 0 and self.reject_num == 0)):
@@ -271,58 +283,56 @@ class Acceptor(threading.Thread):
         :param value: 决议的值
         :return: 响应报文
         """
-        res = {}
         if value["status"] == "stop":
             self.isStart = False
             res = {"type": "stop"}
-        # 如果接受到的是"proposing"
-        elif value["type"] == "proposing":
             # 如果从来没接收过申请，更新自身申请
-            if self.values["max"] == 0 and self.values["last"] == 0:
+        elif self.values["max"] == 0 and self.values["last"] == 0:
+            self.values["max"] = value["V_num"]
+            self.values["last"] = value["V_num"]
+            self.values["value"] = value["Value"]
+            res = {
+                "type": "accepting",
+                "result": "promise",
+                "last": 0,
+                "value": self.values["value"],
+                "acceptor_id": self.id,
+                "time": value["time"]}
+        else:
+            # 如果接收的申请编号大于承诺最低表决的申请编号，同意并告知之前表决结果
+            if self.values["max"] < value["V_num"]:
                 self.values["max"] = value["V_num"]
+                res = {
+                    "type": "accepting",
+                    "result": "promise",
+                    "last": self.values["last"],
+                    "value": self.values["value"],
+                    "acceptor_id": self.id,
+                    "time": value["time"]}
+            elif self.values["max"] == value["V_num"]:
+                # 如果收到的申请编号等于承诺最低表决的申请编号，完全同意申请，表决结束
                 self.values["last"] = value["V_num"]
                 self.values["value"] = value["Value"]
                 res = {
                     "type": "accepting",
-                    "result": "promise",
-                    "last": 0,
+                    "result": "ack",
+                    "last": self.values["last"],
                     "value": self.values["value"],
                     "acceptor_id": self.id,
-                    "time": value["time"]}
+                    "time": value["time"]
+                }
             else:
-                # 如果接收的申请编号大于承诺最低表决的申请编号，同意并告知之前表决结果
-                if self.values["max"] < value["V_num"]:
-                    self.values["max"] = value["V_num"]
-                    res = {
-                        "type": "accepting",
-                        "result": "promise",
-                        "last": self.values["last"],
-                        "value": self.values["value"],
-                        "acceptor_id": self.id,
-                        "time": value["time"]}
-                elif self.values["max"] == value["V_num"]:
-                    # 如果收到的申请编号等于承诺最低表决的申请编号，完全同意申请，表决结束
-                    self.values["last"] = value["V_num"]
-                    self.values["value"] = value["Value"]
-                    res = {
-                        "type": "accepting",
-                        "result": "ack",
-                        "last": self.values["last"],
-                        "value": self.values["value"],
-                        "acceptor_id": self.id,
-                        "time": value["time"]
-                    }
-                else:
-                    # 如果收到的申请小于承诺最低表决的申请，直接拒绝
-                    res = {
-                        "max_val": self.values["max"],
-                        "type": "accepting",
-                        "result": "reject",
-                        "last": self.values["last"],
-                        "value": self.values["value"],
-                        "acceptor_id": self.id,
-                        "time": value["time"]
-                    }
+                # 如果收到的申请小于承诺最低表决的申请，直接拒绝
+                res = {
+                    "max_val": self.values["max"],
+                    "type": "accepting",
+                    "result": "reject",
+                    "last": self.values["last"],
+                    "value": self.values["value"],
+                    "acceptor_id": self.id,
+                    "time": value["time"]
+                }
+
         return res
 
 
