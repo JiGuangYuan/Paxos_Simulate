@@ -25,11 +25,11 @@ PACKET_LOSS = 20
 # 网络发送时延
 SEND_DELAY = 0
 # proposers的数量
-proposers_num = 3
+proposers_num = 5
 # acceptors的数量
-acceptors_num = 5
+acceptors_num = 10
 # learners的数量
-learners_num = 5
+learners_num = 10
 # 发送消息数
 send_msg_num = 0
 # 提交失败数
@@ -77,8 +77,8 @@ class Proposer(threading.Thread):
         self.queue_recv = queue_from_acceptor
         self.queue_send = queue_to_acceptors
         self.id = proposer_id  # proposer的id
+        self.promise_num = 0  # 承若的acceptor计数
         self.reject_num = 0  # 拒绝的acceptor计数
-        self.promise_num = 0  # 保证的acceptor计数
         self.ack_num = 0  # 同意的acceptor计数
         self.start_propose = False  # proposer开始标志
         self.fail_list = []  # 超时失效的消息队列
