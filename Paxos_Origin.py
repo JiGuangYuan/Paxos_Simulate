@@ -25,11 +25,11 @@ PACKET_LOSS = 20
 # 网络发送时延
 SEND_DELAY = 0
 # proposers的数量
-proposers_num = 5
+proposers_num = 3
 # acceptors的数量
-acceptors_num = 10
+acceptors_num = 5
 # learners的数量
-learners_num = 10
+learners_num = 5
 # 发送消息数
 send_msg_num = 0
 # 提交失败数
@@ -121,8 +121,8 @@ class Proposer(threading.Thread):
                         self.ack_num = 0
                         self.send_propose()
                         continue
-                        # if self.chosen > len(self.acceptors) / 2:
-                    elif self.ack_num > round(len(self.acceptors) / 2):
+                        # self.ack_num > round(len(self.acceptors) / 2):
+                    elif self.ack_num == len(self.acceptors):
                         # 如果超过半数chosen则被同意
                         print_str(
                             ">>>>>>>>>>>>>>>    " + self.value + "被同意，完成投票过程    <<<<<<<<<<<<<<<")
@@ -165,11 +165,8 @@ class Proposer(threading.Thread):
         # 如果是acceptor过来的报文，解析报文
         elif var["type"] == "accepting":
             if time.time() - self.time_start < OVER_TIME:
-                if var["result"] == "reject":
-                    # 拒绝的申请编号+1
-                    self.reject_num += 1
-                    self.v_num = var["max_val"] + 1
-                elif var["result"] == "promise":
+
+                if var["result"] == "promise":
                     self.promise_num += 1
                     """
                     # 修改决议为acceptor建议的决议
@@ -183,6 +180,10 @@ class Proposer(threading.Thread):
                     }
 
                     """
+                elif var["result"] == "reject":
+                    # 拒绝的申请编号+1
+                    self.reject_num += 1
+                    self.v_num = var["max_val"] + 1
                 elif var["result"] == "ack":
                     self.ack_num += 1
             else:
@@ -286,7 +287,7 @@ class Acceptor(threading.Thread):
         if value["status"] == "stop":
             self.isStart = False
             res = {"type": "stop"}
-            # 如果从来没接收过申请，更新自身申请
+        # 如果从来没接收过申请，更新自身申请
         elif self.values["max"] == 0 and self.values["last"] == 0:
             self.values["max"] = value["V_num"]
             self.values["last"] = value["V_num"]
@@ -379,7 +380,6 @@ class Leader(threading.Thread):
             self.time_start = time.time()
         index = random.randrange(8)
         while True:
-
             # 接收learner回复的状态信息
             try:
                 var = self.queue_recv.get(False)
@@ -392,9 +392,10 @@ class Leader(threading.Thread):
                         "value": self.values[index],  # 议案内容
                         "value_num": self.value_num,  # 议案编号
                     }
+
                     if time.time() - self.time_start < OVER_TIME:
                         self.recv_ready_num += 1
-                        if self.recv_ack_num == learners_num:
+                        if self.recv_ready_num == learners_num:
                             # 发送commit信号给learner
                             for n in range(learners_num):
                                 self.queue_send[n].put(rsp)
@@ -474,6 +475,7 @@ class Learner(threading.Thread):
                 self.queue_send.put(rsp)
                 send_msg_num += 1
                 print_str("发送回应")
+                print_str(rsp["type"])
             except Empty:
                 continue
 
