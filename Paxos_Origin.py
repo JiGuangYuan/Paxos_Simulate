@@ -78,8 +78,8 @@ class Proposer(threading.Thread):
         self.queue_send = queue_to_acceptors
         self.id = proposer_id  # proposer的id
         self.reject_num = 0  # 拒绝的acceptor计数
-        self.accept_num = 0  # 接受的acceptor计数
-        self.chosen_num = 0  # 选择的acceptor计数
+        self.promise_num = 0  # 保证的acceptor计数
+        self.ack_num = 0  # 同意的acceptor计数
         self.start_propose = False  # proposer开始标志
         self.fail_list = []  # 超时失效的消息队列
         self.v_num = 100 + self.id  # 申请的编号
@@ -107,44 +107,32 @@ class Proposer(threading.Thread):
             except Empty:
                 # 投票结束了
                 if self.start_propose is True and time.time() - self.time_start > OVER_TIME:
-                    print_str("#######  " + self.name + "的本次申请" + self.value + "投票结束，Accept:" + str(
-                        self.accept_num) + " ,Reject:" + str(
-                        self.reject_num) + " ,Chosen: " + str(self.chosen_num))
+                    print_str("#######  " + self.name + "的本次申请" + self.value + "投票结束，Promise:" + str(
+                        self.promise_num) + " ,Reject:" + str(
+                        self.reject_num) + " ,Ack: " + str(self.ack_num))
                     self.start_propose = False
                     # 判断投票结果
                     if self.reject_num > 0:
                         # 如果有一个拒绝则被否决
                         print_str(
                             "-------------    " + self.name + "的申请" + self.value + "被否决，重新申请    ---------------")
+                        self.promise_num = 0
                         self.reject_num = 0
-                        self.chosen_num = 0
-                        self.accept_num = 0
+                        self.ack_num = 0
                         self.send_propose()
                         continue
-                        # if self.chosen > len(self.acceptors) / 2:
-                    elif self.chosen_num == len(self.acceptors):
-                        # 如果超过半数chosen则被同意
-                        print_str(
-                            ">>>>>>>>>>>>>>>    " + self.name + "的申请" + self.value + "被同意，完成表决过程    <<<<<<<<<<<<<<<")
-                        print_str("-------------------------- " + self.name + "：成为了Leader-----------------------")
-                        # Proposer竞争为leader成功，启动leader进程
-                        ld = Leader("Leader", q_to_leader, q_to_learners)
-                        ld.start()
-                        # (改进) proposer直接告之其它Proposer停止申请，设置proposer全局变量
-                        for acceptor in self.acceptors:
-                            self.var = {"status": "stop", "proposer_id": self.id}
-                            print_str("结束选举,清空队列,发出结束信号")
-                            while not self.queue_send[acceptor].empty():
-                                self.queue_send[acceptor].get()
-                            self.queue_send[acceptor].put(self.var)
-                            send_msg_num += 1
-                    elif (self.accept_num > 0 or (
-                                        len(self.acceptors) > self.chosen_num > 0 and self.reject_num == 0) or (
-                                        self.accept_num == 0 and self.chosen_num == 0 and self.reject_num == 0)):
+                    elif self.promise_num > round(len(self.acceptors) / 2):
+                        # 如果超过半数ack则被同意
+                            else:
+                                print_str(self.name + "   >>>>>    发送申请失败")
+                                fail_msg_num += 1
+                    elif (self.promise_num > 0 or (
+                                        len(self.acceptors) > self.ack_num > 0 and self.reject_num == 0) or (
+                                        self.promise_num == 0 and self.ack_num == 0 and self.reject_num == 0)):
                         # 网络原因获取回应失败，重新开始申请
+                        self.promise_num = 0
                         self.reject_num = 0
-                        self.chosen_num = 0
-                        self.accept_num = 0
+                        self.ack_num = 0
                         self.send_propose()
                 continue
 
@@ -154,6 +142,7 @@ class Proposer(threading.Thread):
         :param var: 消息报文
         :return:
         """
+        global send_msg_num
         global fail_msg_num
         # 如果是启动命令，启动程序
         if var["type"] == "start":
@@ -168,8 +157,8 @@ class Proposer(threading.Thread):
                     # 拒绝的申请编号+1
                     self.reject_num += 1
                     self.v_num = var["max_val"] + 1
-                elif var["result"] == "accept":
-                    self.accept_num += 1
+                elif var["result"] == "promise":
+                    self.promise_num += 1
                     """
                     # 修改决议为acceptor建议的决议
                     self.value = var["value"]
@@ -182,8 +171,8 @@ class Proposer(threading.Thread):
                     }
 
                     """
-                elif var["result"] == "chosen":
-                    self.chosen_num += 1
+                elif var["result"] == "ack":
+                    self.ack_num += 1
             else:
                 # 超时接收,则丢弃
                 print_str("消息报文超时失效，丢弃...")
@@ -282,55 +271,58 @@ class Acceptor(threading.Thread):
         :param value: 决议的值
         :return: 响应报文
         """
+        res = {}
         if value["status"] == "stop":
             self.isStart = False
             res = {"type": "stop"}
-        # 如果从来没接收过申请，更新自身申请
-        elif self.values["max"] == 0 and self.values["last"] == 0:
-            self.values["max"] = value["V_num"]
-            self.values["last"] = value["V_num"]
-            self.values["value"] = value["Value"]
-            res = {
-                "type": "accepting",
-                "result": "accept",
-                "last": 0,
-                "value": self.values["value"],
-                "acceptor_id": self.id,
-                "time": value["time"]}
-        else:
-            # 如果接收的申请编号大于承诺最低表决的申请编号，同意并告知之前表决结果
-            if self.values["max"] < value["V_num"]:
+        # 如果接受到的是"proposing"
+        elif value["type"] == "proposing":
+            # 如果从来没接收过申请，更新自身申请
+            if self.values["max"] == 0 and self.values["last"] == 0:
                 self.values["max"] = value["V_num"]
-                res = {
-                    "type": "accepting",
-                    "result": "accept",
-                    "last": self.values["last"],
-                    "value": self.values["value"],
-                    "acceptor_id": self.id,
-                    "time": value["time"]}
-            elif self.values["max"] == value["V_num"]:
-                # 如果收到的申请编号等于承诺最低表决的申请编号，完全同意申请，表决结束
                 self.values["last"] = value["V_num"]
                 self.values["value"] = value["Value"]
                 res = {
                     "type": "accepting",
-                    "result": "chosen",
-                    "last": self.values["last"],
+                    "result": "promise",
+                    "last": 0,
                     "value": self.values["value"],
                     "acceptor_id": self.id,
-                    "time": value["time"]
-                }
+                    "time": value["time"]}
             else:
-                # 如果收到的申请小于承诺最低表决的申请，直接拒绝
-                res = {
-                    "max_val": self.values["max"],
-                    "type": "accepting",
-                    "result": "reject",
-                    "last": self.values["last"],
-                    "value": self.values["value"],
-                    "acceptor_id": self.id,
-                    "time": value["time"]
-                }
+                # 如果接收的申请编号大于承诺最低表决的申请编号，同意并告知之前表决结果
+                if self.values["max"] < value["V_num"]:
+                    self.values["max"] = value["V_num"]
+                    res = {
+                        "type": "accepting",
+                        "result": "promise",
+                        "last": self.values["last"],
+                        "value": self.values["value"],
+                        "acceptor_id": self.id,
+                        "time": value["time"]}
+                elif self.values["max"] == value["V_num"]:
+                    # 如果收到的申请编号等于承诺最低表决的申请编号，完全同意申请，表决结束
+                    self.values["last"] = value["V_num"]
+                    self.values["value"] = value["Value"]
+                    res = {
+                        "type": "accepting",
+                        "result": "ack",
+                        "last": self.values["last"],
+                        "value": self.values["value"],
+                        "acceptor_id": self.id,
+                        "time": value["time"]
+                    }
+                else:
+                    # 如果收到的申请小于承诺最低表决的申请，直接拒绝
+                    res = {
+                        "max_val": self.values["max"],
+                        "type": "accepting",
+                        "result": "reject",
+                        "last": self.values["last"],
+                        "value": self.values["value"],
+                        "acceptor_id": self.id,
+                        "time": value["time"]
+                    }
         return res
 
 
@@ -482,20 +474,20 @@ if __name__ == '__main__':
     q_to_learners = []  # learner通讯的消息队列
     q_to_leader = Queue()  # leader通讯的消息队列
     start_time = time.time()
-    for i in range(0, proposers_num):
+    for i in range(proposers_num):
         q_to_proposers.append(Queue())
         proposer_th = Proposer("proposer'" + str(i) + "'", q_to_proposers[i], q_to_acceptors, i)
         proposer_th.setDaemon(True)
         proposer_th.start()
 
-    for i in range(0, acceptors_num):
+    for i in range(acceptors_num):
         q_to_acceptors.append(Queue())
         acceptor_th = Acceptor("Acceptor'" + str(i) + "'", q_to_acceptors[i], q_to_proposers, i)
         acceptor_th.setDaemon(True)
         acceptor_th.start()
 
     # learner进程的开启
-    for i in range(0, learners_num):
+    for i in range(learners_num):
         q_to_learners.append(Queue())
         learner_th = Learner("Learner'" + str(i) + "'", q_to_learners[i], q_to_leader, i)
         learner_th.setDaemon(True)
