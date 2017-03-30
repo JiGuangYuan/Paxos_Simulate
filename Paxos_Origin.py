@@ -81,7 +81,7 @@ class Proposer(threading.Thread):
         self.reject_num = 0  # 拒绝的acceptor计数
         self.ack_num = 0  # 同意的acceptor计数
         self.nack_num = 0  # 不同意的acceptor计数
-        self.start_propose = False  # proposer开始标志
+        self.first_stage = False  # proposer第一阶段标志
         self.fail_list = []  # 超时失效的消息队列
         self.v_num = 100 + self.id  # 申请的编号
         self.value = th_name + "申请成为leader"  # 申请的内容
@@ -107,62 +107,74 @@ class Proposer(threading.Thread):
                 self.process_msg(var)
             except Empty:
                 # 本次投票结束了
-                if self.start_propose is True and time.time() - self.time_start > OVER_TIME:
-                    print_str(self.value + "投票结束，Promise:" + str(
-                        self.promise_num) + " ,Reject:" + str(
-                        self.reject_num) + " ,ack" + str(self.ack_num) + " ,nack" + str(self.nack_num))
-                    self.start_propose = False
-                    # 判断投票结果
-                    if self.reject_num > 0 or self.nack_num > 0:
-                        # 如果有一个拒绝则被否决
+                if time.time() - self.time_start > OVER_TIME:
+                    if self.first_stage is True:
                         print_str(
-                            "-------------    " + self.name + "的申请" + self.value + "被否决，重新申请    ---------------")
-                        self.promise_num = 0
-                        self.reject_num = 0
-                        self.ack_num = 0
-                        self.send_propose()
-                    # 如果超过半数ack 则说明申请已经被acceptor同意
-                    elif self.ack_num > round(len(self.acceptors) / 2):
-                        print_str(
-                            ">>>>>>>>>>>>>>>    " + self.value + "被同意，完成投票过程    <<<<<<<<<<<<<<<")
-                        print_str("-------------------------- " + self.name + "：成为了Leader-----------------------")
-                        # Proposer竞争为leader成功，启动leader进程
-                        ld = Leader("Leader", q_to_leader, q_to_learners)
-                        ld.start()
-                        # (改进) proposer直接告之其它Proposer停止申请，设置proposer全局变量
-                        for acceptor in self.acceptors:
-                            self.var = {"status": "stop", "proposer_id": self.id}
-                            print_str("结束选举,清空队列,发出结束信号")
-                            while not self.queue_send[acceptor].empty():
-                                self.queue_send[acceptor].get()
-                            self.queue_send[acceptor].put(self.var)
-                            send_msg_num += 1
-                    # 如果超过半数promise则向acceptor发送decide信号
-                    elif self.promise_num > round(len(self.acceptors) / 2):
-                        self.time_start = 0
-                        for acceptor in self.acceptors:
-                            # 提出申请，有概率发送失败
-                            if random.randrange(100) < (100 - PACKET_LOSS):
-                                self.var = {
-                                    "status": "start",
-                                    "type": "decide",
-                                    "V_num": self.v_num,
-                                    "Value": self.value,
-                                    "proposer_id": self.id,
-                                }
-                                print_str(" 编号：" + str(self.v_num) + " ，决议：" + self.var["Value"])
+                            self.value + "投票结束，Promise:" + str(self.promise_num) + " ,Reject:" + str(self.reject_num))
+                        self.first_stage = False
+                        # 判断投票结果
+                        if self.reject_num > 0 or self.nack_num > 0:
+                            # 如果有一个拒绝则被否决
+                            print_str(
+                                "-------------    " + self.name + "的申请" + self.value + "被否决，重新申请    ---------------")
+                            self.promise_num = 0
+                            self.reject_num = 0
+                            self.ack_num = 0
+                            self.send_propose()
+                        # 如果超过半数promise则向acceptor发送decide信号
+                        elif self.promise_num > round(len(self.acceptors) / 2):
+                            self.time_start = time.time()
+                            for acceptor in self.acceptors:
+                                # 提出申请，有概率发送失败
+                                if random.randrange(100) < (100 - PACKET_LOSS):
+                                    self.var = {
+                                        "status": "start",
+                                        "type": "decide",
+                                        "V_num": self.v_num,
+                                        "Value": self.value,
+                                        "proposer_id": self.id
+                                    }
+                                    print_str(" 编号：" + str(self.v_num) + " ，决议：" + self.var["Value"])
+                                    self.queue_send[acceptor].put(self.var)
+                                    send_msg_num += 1
+                                else:
+                                    print_str(self.name + "   >>>>>    发送决定失败")
+                                    fail_msg_num += 1
+
+                    else:
+                        print_str(self.value + "投票结束，ack:" + str(self.ack_num) + " ,nack:" + str(self.nack_num))
+                        # 判断投票结果
+                        if self.reject_num > 0 or self.nack_num > 0:
+                            # 如果有一个拒绝则被否决
+                            print_str(
+                                "-------------    " + self.name + "的申请" + self.value + "被否决，重新申请    ---------------")
+                            self.promise_num = 0
+                            self.reject_num = 0
+                            self.ack_num = 0
+                            self.send_propose()
+                        # 如果超过半数ack 则说明申请已经被acceptor同意
+                        elif self.ack_num > round(len(self.acceptors) / 2):
+                            print_str(
+                                ">>>>>>>>>>>>>>>    " + self.value + "被同意，完成投票过程    <<<<<<<<<<<<<<<")
+                            print_str("-------------------------- " + self.name + "：成为了Leader-----------------------")
+                            # Proposer竞争为leader成功，启动leader进程
+                            ld = Leader("Leader", q_to_leader, q_to_learners)
+                            ld.start()
+                            # (改进) proposer直接告之其它Proposer停止申请，设置proposer全局变量
+                            for acceptor in self.acceptors:
+                                self.var = {"status": "stop", "proposer_id": self.id}
+                                print_str("结束选举,清空队列,发出结束信号")
+                                while not self.queue_send[acceptor].empty():
+                                    self.queue_send[acceptor].get()
                                 self.queue_send[acceptor].put(self.var)
                                 send_msg_num += 1
-                            else:
-                                print_str(self.name + "   >>>>>    发送决定失败")
-                                fail_msg_num += 1
-                    else:
+
                         # 网络原因获取回应失败，重新开始申请
                         self.promise_num = 0
                         self.reject_num = 0
                         self.ack_num = 0
                         self.send_propose()
-                    continue
+                        continue
 
     def process_msg(self, var):
         """
@@ -206,6 +218,7 @@ class Proposer(threading.Thread):
                 fail_msg_num += 1
         elif var["type"] == "deciding":
             if time.time() - self.time_start < OVER_TIME:
+                print_str(self.name + str(self.nack_num) + "," + str(self.ack_num))
                 if var["result"] == "ack":
                     self.ack_num += 1
                 elif var["result"] == "nack":
@@ -219,7 +232,7 @@ class Proposer(threading.Thread):
         global send_msg_num
         global fail_msg_num
         self.time_start = time.time()
-        self.start_propose = True
+        self.first_stage = True
         # 模拟发送时延50ms-1000ms
         time.sleep(1 / random.randrange(1, 20))
         # 申请自身为leader
@@ -232,12 +245,12 @@ class Proposer(threading.Thread):
                     "type": "proposing",
                     "V_num": self.v_num,
                     "Value": self.value,
-                    "proposer_id": self.id,
+                    "proposer_id": self.id
                 }
                 print_str(
                     self.name + "   >>>>>    编号：" + str(self.v_num) + " ，决议：" +
-                    self.var["Value"] + " ,日期：" + time.strftime("%Y-%m-%d %H:%M:%S",
-                                                                time.localtime(self.time_start)))
+                    str(self.var["Value"]) + " ,日期：" + time.strftime("%Y-%m-%d %H:%M:%S",
+                                                                     time.localtime(self.time_start)))
                 self.queue_send[acceptor].put(self.var)
                 send_msg_num += 1
             else:
@@ -268,7 +281,8 @@ class Acceptor(threading.Thread):
         self.values = {
             "last": 0,  # 最后一次表决的申请编号
             "value": "",  # 最后一次表决的申请的内容
-            "max": 0}  # 承诺的最低表决申请编号
+            "max": 0  # 承诺的最低表决申请编号
+        }
 
     def run(self):
         global send_msg_num
