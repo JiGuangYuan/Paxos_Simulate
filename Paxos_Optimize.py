@@ -1,4 +1,6 @@
 # -*- coding=utf-8 -*-
+# Created on 2017年2月21日
+# @author: JiGuang Yuan
 """
 
 算法改进:
@@ -29,7 +31,7 @@ mutex = threading.Lock()
 OVER_TIME = 5
 # 网络丢包率
 PACKET_LOSS = 20
-# learner忙的概率
+# learner忙碌的概率
 BUSS = 20
 # proposers的数量
 proposers_num = 3
@@ -41,8 +43,8 @@ learners_num = 5
 send_msg_num = 0
 # 提交失败数
 fail_msg_num = 0
-# 模拟宕机的个数
-crash_num = 0
+# 模拟Acceptor宕机的个数
+crash_num = 2
 crash_list = random.sample(range(acceptors_num), crash_num)
 
 
@@ -63,7 +65,8 @@ def network_delay():
     模拟网络传输延迟
     :return: 
     """
-    time.sleep(1 / random.randrange(4, 5))
+    # 200ms~250ms 延迟
+    time.sleep(1 / random.randint(4, 5))
 
 
 class Proposer(threading.Thread):
@@ -135,11 +138,7 @@ class Proposer(threading.Thread):
                             # 如果有一个拒绝则被否决
                             print_str(
                                 "-------------    " + self.name + "的申请" + self.value + "被否决，重新申请    ---------------")
-                            self.promise_num = 0
-                            self.reject_num = 0
-                            self.ack_num = 0
-                            self.nack_num = 0
-                            self.send_propose()
+                            self.re_send()
                         # 如果超过半数promise则向acceptor发送decide信号
                         elif self.promise_num > round(len(self.acceptors) / 2):
                             self.time_start = time.time()
@@ -159,7 +158,9 @@ class Proposer(threading.Thread):
                                 else:
                                     print_str(self.name + "   >>>>>    发送决定失败")
                                     fail_msg_num += 1
-
+                        else:
+                            # 网络原因获取回应失败，重新开始申请
+                            self.re_send()
                     else:
                         print_str(
                             self.value + "：<< 第二阶段 >>投票结束，ack:" + str(self.ack_num) + " ,nack:" + str(self.nack_num))
@@ -168,11 +169,7 @@ class Proposer(threading.Thread):
                             # 如果有一个拒绝则被否决
                             print_str(
                                 "-------------    " + self.name + "的申请" + self.value + "被否决，重新申请    ---------------")
-                            self.promise_num = 0
-                            self.reject_num = 0
-                            self.ack_num = 0
-                            self.nack_num = 0
-                            self.send_propose()
+                            self.re_send()
                         # 如果超过半数ack 则说明申请已经被acceptor同意
                         elif self.ack_num > round(len(self.acceptors) / 2):
                             print_str(
@@ -183,17 +180,30 @@ class Proposer(threading.Thread):
                             ld.start()
                             # (改进) proposer直接告之其它Proposer停止申请，proposer增加一个监听其它proposer的队列
                             for proposer in range(proposers_num):
-                                print_str("结束选举,清空队列，直接通知其它proposer结束")
+                                print_str("结束选举,重置数据，直接通知其它proposer结束")
+                                self.promise_num = 0
+                                self.reject_num = 0
+                                self.ack_num = 0
+                                self.nack_num = 0
                                 var = {"type": "stop"}
                                 self.queue_send_proposer[proposer].put(var)
                                 send_msg_num += 1
-                        # 网络原因获取回应失败，重新开始申请
-                        self.promise_num = 0
-                        self.reject_num = 0
-                        self.ack_num = 0
-                        self.nack_num = 0
-                        self.send_propose()
-                        continue
+                        else:
+                            # 网络原因获取回应失败，重新开始申请
+                            self.re_send()
+
+    def re_send(self):
+        """
+        重新发送申请
+        :return: 
+        """
+        self.promise_num = 0
+        self.reject_num = 0
+        self.ack_num = 0
+        self.nack_num = 0
+        # 随机等待一段时间防止发生活锁
+        time.sleep(random.randint(3, 5))
+        self.send_propose()
 
     def process_msg(self, var):
         """
@@ -364,6 +374,7 @@ class Acceptor(threading.Thread):
                         # 有概率发送失败
                         if random.randrange(100) < (100 - PACKET_LOSS):
                             self.queue_send[self.values["max_proposer_id"]].put(rsp)
+                            print_str(self.name + "   >>>>>    发送提前nack成功")
                             send_msg_num += 1
                         else:
                             print_str(self.name + "   >>>>>    发送提前nack失败")
@@ -500,6 +511,7 @@ class Leader(threading.Thread):
                             send_msg_num += 1
                             self.queue_send[n].put(req)
                             print_str("Leader >>>>> 发送 commit 信号")
+                        self.success_list = []
                         self.time_start = time.time()
 
                 continue
@@ -508,7 +520,7 @@ class Leader(threading.Thread):
         global send_msg_num
         req = {"type": "prepare"}
         for n in range(0, learners_num):
-            # 发送prepare信号给learner
+            # 发送prepare信号给learner，
             self.queue_send[n].put(req)
             print_str("发送 prepare 信号")
             send_msg_num += 1
@@ -560,11 +572,18 @@ class Learner(threading.Thread):
                 # 模拟网络传输延迟
                 network_delay()
                 if var["type"] == "prepare":
-                    # 发送ready响应信号回去
-                    rsp = {
-                        "type": "ready",
-                        "learner_id": self.id
-                    }
+                    if random.randrange(100) < (100 - BUSS):
+                        # 发送ready响应信号回去
+                        rsp = {
+                            "type": "ready",
+                            "learner_id": self.id
+                        }
+                    else:
+                        rsp = {
+                            "type": "null",
+                            "learner_id": self.id
+                        }
+
                 elif var["type"] == "commit":
                     # 发送ack响应信号回去
                     rsp = {
@@ -590,6 +609,7 @@ if __name__ == '__main__':
     q_proposer_to_proposers = []  # proposer和其它proposer的消息队列
     q_to_leader = Queue()  # leader通讯的消息队列
     start_time = time.time()
+    print("----分布式一致性协议系统开始----")
     for i in range(proposers_num):
         q_to_proposers.append(Queue())
         q_proposer_to_proposers.append(Queue())
